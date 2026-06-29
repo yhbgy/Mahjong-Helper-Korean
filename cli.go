@@ -20,18 +20,18 @@ func printAccountInfo(accountID int) {
 func (p *playerInfo) printDiscards() {
 	// TODO: 부자연스러운 버림패나 위험패를 강조한다. 예:
 	// - 초반부터 중장패를 버림
-	// - 중장패를 버리기 시작한 뒤 요구패를 손패기리함
+	// - 중장패를 버리기 시작한 뒤 요구패를 테다시함
 	//   (누군가가 퐁해서 생긴 현상일 수도 있다. 예: 133m에서 누군가 2m을 퐁)
 	// - 도라를 버림
 	// - 적도라를 버림
 	// - 누군가 리치한 상황에서 위험도가 높은 패를 여러 번 버림
 	//   (상대가 읽고 버렸거나, 상대 손패와 강 정보상 안전패가 생겼을 가능성도 있다)
 	// - 그 밖의 예시는 《마신의 눈》 번역 참고: https://tieba.baidu.com/p/3311909701
-	//      단순한 예로, 손패기리로 또이츠 하나를 깨면 치또이츠 가능성은 거의 사라진다.
-	//      상대가 초반에 양면 타쯔를 손패기리했다면 혼일/청일 계열 또는 또이츠형을 추정할 수 있고,
+	//      단순한 예로, 테다시로 또이츠 하나를 깨면 치또이츠 가능성은 거의 사라진다.
+	//      상대가 초반에 양면 타쯔를 테다시했다면 혼일/청일 계열 또는 또이츠형을 추정할 수 있고,
 	//      그 뒤 리치나 후로가 나오면 손패를 더 읽기 쉬워진다.
 	// https://tieba.baidu.com/p/3311909701
-	//      후로 이후와 종반의 손패기리는 가능한 한 기억한다. 다른 사람이 손패기리하기 전의 안전패는 먼저 버리는 편이 좋다.
+	//      후로 이후와 종반의 테다시는 가능한 한 기억한다. 다른 사람이 테다시하기 전의 안전패는 먼저 버리는 편이 좋다.
 	// https://tieba.baidu.com/p/3372239806
 	//      치할 때 나온 패의 색은 위험하다. 퐁 이후에는 모든 패가 위험하다.
 
@@ -42,13 +42,13 @@ func (p *playerInfo) printDiscards() {
 		bgColor := color.BgBlack
 		fgColor := color.FgWhite
 		var tile string
-		if disTile >= 0 { // 손패기리
+		if disTile >= 0 { // 테다시
 			tile = util.Mahjong[disTile]
 			if disTile >= 27 {
-				tile = util.MahjongU[disTile] // 자패 손패기리를 눈에 띄게 표시
+				tile = util.MahjongU[disTile] // 자패 테다시를 눈에 띄게 표시
 			}
 			if p.isNaki { // 후로
-				fgColor = getOtherDiscardAlertColor(disTile) // 중장패 손패기리를 강조
+				fgColor = getOtherDiscardAlertColor(disTile) // 중장패 테다시를 강조
 				if util.InInts(i, p.meldDiscardsAt) {
 					bgColor = color.BgWhite // 후로 직후 버린 패는 배경을 강조
 					fgColor = color.FgBlack

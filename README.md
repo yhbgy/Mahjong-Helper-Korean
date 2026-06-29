@@ -9,7 +9,7 @@
 
 - 대국 중 손패를 자동 분석하고 유효패, 타점 등을 종합해 추천 타패를 표시
 - 상대가 리치했거나 여러 번 후로했을 때 각 패의 위험도를 표시
-- 상대의 손패기리와 쯔모기리를 기록
+- 상대의 테다시와 쯔모기리를 기록
 - 패보를 따라가며 매 타순의 공격/수비 선택을 추천
 - 4인 마작과 3인 마작 지원
 
@@ -210,9 +210,9 @@ go run . -h
 
 ![](img/example_naki2.png)
 
-### 손패기리/쯔모기리와 안전패
+### 테다시/쯔모기리와 안전패
 
-상대의 손패기리와 쯔모기리, 현물, 스지, 노찬스/원찬스 등을 참고해 안전패와 위험패를 표시합니다.
+상대의 테다시와 쯔모기리, 현물, 스지, 노찬스/원찬스 등을 참고해 안전패와 위험패를 표시합니다.
 
 ![](img/example5c1.png)
 
@@ -224,27 +224,36 @@ go run . -h
 - 빨강: 높은 위험
 - 보라: 매우 높은 위험
 
-## 작혼 연동
+## 작혼 웹판 연동
 
-작혼 웹판과 연동하려면 브라우저 쪽 설정이 필요합니다. 원래 프로젝트는 Header Editor 확장으로 작혼의 `code.js`를 가로채어 로컬 서버에 메시지를 보내는 방식을 사용합니다.
+현재 한국 서버(`https://mahjongsoul.game.yo-star.com/kr/index.html`)는 예전 `code.js` 방식이 아니라 Unity WebGL 빌드에서 WebSocket을 직접 엽니다. 그래서 Header Editor 규칙 JSON은 사용하지 않고, Tampermonkey 스크립트로 WebSocket 송수신 데이터를 로컬 도우미 서버에 전달합니다.
 
-대략적인 절차:
-
-1. Chrome 계열 브라우저에서 `chrome://flags/#allow-insecure-localhost`를 열고 `Allow invalid certificates for resources loaded from localhost`를 `Enabled`로 바꿉니다.
-2. 브라우저를 재시작합니다.
-3. Header Editor 확장을 설치합니다.
-4. 규칙 파일을 가져옵니다.
-   - 중국/기본: `https://endlesscheng.gitee.io/public/mahjong-helper.json`
-   - 해외 접속: `https://mjhelper.github.io/mahjong-helper.json`
-5. 도우미를 먼저 실행한 뒤 작혼 웹판을 엽니다.
-
-작혼 도우미 실행:
+### 도우미 서버 실행
 
 ```powershell
 .\.tools\go\bin\go.exe run . -majsoul
 ```
 
-처음 사용할 때는 CPU전을 한 판 시작하거나 게임에 다시 로그인해야 계정 ID와 좌석 정보를 가져올 수 있습니다.
+기본 포트는 `12121`입니다. 포트 충돌이 나면:
+
+```powershell
+.\.tools\go\bin\go.exe run . -majsoul -p 12122
+```
+
+서버가 켜진 상태에서 브라우저로 `https://localhost:12121`을 열어 시간이 표시되는지 확인합니다.
+
+### Tampermonkey 설정
+
+1. Chrome 계열 브라우저에 Tampermonkey 확장을 설치합니다.
+2. Tampermonkey 대시보드에서 새 스크립트를 만듭니다.
+3. [scripts/majsoul-websocket-hook.user.js](scripts/majsoul-websocket-hook.user.js)의 내용을 전체 복사해 붙여넣고 저장합니다.
+4. 스크립트가 켜진 상태에서 작혼 웹판에 접속합니다: `https://mahjongsoul.game.yo-star.com/kr/index.html`
+
+성공하면 브라우저 콘솔에는 `[MJH] WebSocket 생성`, `[MJH] send`, `[MJH] receive` 로그가 뜹니다. 서버 터미널에는 `[majsoul-raw] ...` 로그가 뜹니다.
+
+흐름은 `작혼 웹판 -> Tampermonkey WebSocket hook -> https://localhost:12121/majsoul-raw -> 도우미 서버 로그`입니다.
+
+참고: 현재는 WebSocket 패킷과 `ActionPrototype` 이름까지 해석합니다. `ActionPrototype.data` 내부 액션 본문은 한국 WebGL판에서 추가 난독화/암호화되어 있어 별도 복호화 작업이 더 필요합니다.
 
 ## 개발 메모
 

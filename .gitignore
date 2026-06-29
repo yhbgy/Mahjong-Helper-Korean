@@ -13,13 +13,16 @@
 
 .idea/
 vendor/
+node_modules/
 
 .tools/
 .gocache/
 .gopath/
+.dotnet/
 
 *.txt
 *.log
+log/
 *.bat
 config.json
 

@@ -2,7 +2,9 @@ package main
 
 import (
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"github.com/EndlessCheng/mahjong-helper/platform/majsoul/proto/lq"
@@ -173,10 +175,339 @@ func (h *mjHandler) analysisMajsoulRaw(c echo.Context) error {
 	return c.NoContent(http.StatusOK)
 }
 
+func splitQueryList(value string) []string {
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func splitQueryInts(value string) []int {
+	parts := splitQueryList(value)
+	out := make([]int, 0, len(parts))
+	for _, part := range parts {
+		v, err := strconv.Atoi(part)
+		if err == nil {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func queryParamAny(c echo.Context, names ...string) string {
+	for _, name := range names {
+		if value := c.QueryParam(name); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func queryInt(c echo.Context, name string) int {
+	v, _ := strconv.Atoi(c.QueryParam(name))
+	return v
+}
+
+func queryIntAny(c echo.Context, names ...string) int {
+	v, _ := strconv.Atoi(queryParamAny(c, names...))
+	return v
+}
+
+func queryBoolPtr(c echo.Context, name string) *bool {
+	value := c.QueryParam(name)
+	if value == "" {
+		return nil
+	}
+	parsed := value == "true"
+	return &parsed
+}
+
+func (h *mjHandler) analysisMajsoulLite(c echo.Context) error {
+	action := c.QueryParam("a")
+	switch action {
+	case "n":
+		action = "ActionNewRound"
+	case "z":
+		action = "ActionDealTile"
+	case "q":
+		action = "ActionDiscardTile"
+	case "c":
+		action = "ActionChiPengGang"
+	case "g":
+		action = "ActionAnGangAddGang"
+	case "p":
+		action = "Ping"
+	}
+	msg := map[string]interface{}{}
+
+	switch action {
+	case "Ping":
+		majsoulRawPrintf("[majsoul-lite] ping %s\n", c.Request().URL.RawQuery)
+		return c.NoContent(http.StatusOK)
+	case "ActionNewRound":
+		msg["md5"] = "majsoul-lite"
+		msg["chang"] = queryIntAny(c, "chang", "c")
+		msg["ju"] = queryIntAny(c, "ju", "j")
+		msg["ben"] = queryIntAny(c, "ben", "b")
+		msg["tiles"] = splitQueryList(queryParamAny(c, "tiles", "t"))
+		msg["dora"] = queryParamAny(c, "dora", "d")
+		msg["left_tile_count"] = queryIntAny(c, "left_tile_count", "l")
+	case "ActionDealTile":
+		msg["seat"] = queryIntAny(c, "seat", "s")
+		msg["tile"] = queryParamAny(c, "tile", "t")
+		if msg["tile"] == "" {
+			majsoulRawPrintf("[majsoul-lite] skip empty ActionDealTile %s\n", c.Request().URL.RawQuery)
+			return c.NoContent(http.StatusOK)
+		}
+		msg["doras"] = splitQueryList(queryParamAny(c, "doras", "d"))
+		msg["left_tile_count"] = queryIntAny(c, "left_tile_count", "l")
+	case "ActionDiscardTile":
+		msg["seat"] = queryIntAny(c, "seat", "s")
+		msg["tile"] = queryParamAny(c, "tile", "t")
+		msg["moqie"] = queryBoolPtr(c, "moqie")
+		msg["is_liqi"] = queryBoolPtr(c, "is_liqi")
+		msg["is_wliqi"] = queryBoolPtr(c, "is_wliqi")
+		msg["doras"] = splitQueryList(queryParamAny(c, "doras", "d"))
+	case "ActionChiPengGang":
+		msg["seat"] = queryIntAny(c, "seat", "s")
+		msg["type"] = queryIntAny(c, "type", "y")
+		msg["tiles"] = splitQueryList(queryParamAny(c, "tiles", "t"))
+		msg["froms"] = splitQueryInts(queryParamAny(c, "froms", "f"))
+		msg["doras"] = splitQueryList(queryParamAny(c, "doras", "d"))
+	case "ActionAnGangAddGang":
+		msg["seat"] = queryIntAny(c, "seat", "s")
+		msg["type"] = queryIntAny(c, "type", "y")
+		msg["tiles"] = queryParamAny(c, "tiles", "t")
+		msg["doras"] = splitQueryList(queryParamAny(c, "doras", "d"))
+	default:
+		return c.String(http.StatusBadRequest, "unknown action")
+	}
+
+	msg["_action"] = action
+	majsoulRawPrintf("[majsoul-lite] %s %s\n", action, c.Request().URL.RawQuery)
+	data, err := json.Marshal(msg)
+	if err != nil {
+		h.logError(err)
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	h.majsoulMessageQueue <- data
+	return c.NoContent(http.StatusOK)
+}
+
+func xorMajsoulLua(data []byte) []byte {
+	out := make([]byte, len(data))
+	key := []byte(majsoulLuaXorKey)
+	for i, b := range data {
+		out[i] = b ^ key[i%len(key)]
+	}
+	return out
+}
+
+func skipLuaString(src string, pos int) int {
+	quote := src[pos]
+	pos++
+	for pos < len(src) {
+		if src[pos] == '\\' {
+			pos += 2
+			continue
+		}
+		if src[pos] == quote {
+			return pos + 1
+		}
+		pos++
+	}
+	return len(src)
+}
+
+func findLuaCallEnd(src string, pos int) int {
+	depth := 0
+	for pos < len(src) {
+		switch src[pos] {
+		case '\'', '"':
+			pos = skipLuaString(src, pos)
+			continue
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return pos + 1
+			}
+		}
+		pos++
+	}
+	return len(src)
+}
+
+func blankLogToolInfoCalls(src string) string {
+	var b strings.Builder
+	for {
+		idx := strings.Index(src, "LogTool.Info(")
+		if idx < 0 {
+			b.WriteString(src)
+			break
+		}
+		b.WriteString(src[:idx])
+		end := findLuaCallEnd(src, idx+len("LogTool.Info"))
+		if end <= idx {
+			b.WriteString(src[idx:])
+			break
+		}
+		src = src[end:]
+	}
+	return b.String()
+}
+
+func patchMajsoulLuaSource(src string, action string, wrapper string) (string, error) {
+	originalLen := len(src)
+	ret := "return " + action
+	idx := strings.LastIndex(src, ret)
+	if idx < 0 {
+		play := "function " + action + ".Play("
+		playIdx := strings.Index(src, play)
+		if playIdx < 0 {
+			return "", fmt.Errorf("%s return statement not found", action)
+		}
+		paramStart := playIdx + len(play)
+		paramEnd := strings.IndexByte(src[paramStart:], ')')
+		if paramEnd < 0 {
+			return "", fmt.Errorf("%s Play parameter end not found", action)
+		}
+		param := strings.TrimSpace(src[paramStart : paramStart+paramEnd])
+		wrapper = strings.ReplaceAll(wrapper, "$", param)
+
+		logIdx := strings.Index(src[paramStart+paramEnd+1:], "LogTool.Info(")
+		if logIdx < 0 {
+			return "", fmt.Errorf("%s LogTool.Info call not found", action)
+		}
+		logIdx += paramStart + paramEnd + 1
+		logEnd := findLuaCallEnd(src, logIdx+len("LogTool.Info"))
+		if logEnd <= logIdx {
+			return "", fmt.Errorf("%s LogTool.Info end not found", action)
+		}
+		replaceLen := logEnd - logIdx
+		if len(wrapper) > replaceLen {
+			return "", fmt.Errorf("%s patch too large: %d > %d", action, len(wrapper), replaceLen)
+		}
+		return src[:logIdx] + wrapper + strings.Repeat(" ", replaceLen-len(wrapper)) + src[logEnd:], nil
+	}
+
+	src = blankLogToolInfoCalls(src)
+	idx = strings.LastIndex(src, ret)
+	if idx < 0 {
+		return "", fmt.Errorf("%s return statement not found after log cleanup", action)
+	}
+
+	patched := src[:idx] + wrapper + src[idx:]
+	if len(patched) > originalLen {
+		return "", fmt.Errorf("%s patch too large: %d > %d", action, len(patched), originalLen)
+	}
+	if len(patched) < originalLen {
+		patched = patched[:idx+len(wrapper)] + strings.Repeat(" ", originalLen-len(patched)) + patched[idx+len(wrapper):]
+	}
+	return patched, nil
+}
+
+func (h *mjHandler) majsoulLuaPatches(c echo.Context) error {
+	patches := make([]majsoulLuaPatch, 0, len(majsoulLuaPatchTargets))
+	for _, target := range majsoulLuaPatchTargets {
+		decryptedPath := filepath.Join("log", "bundle_probe", "decrypted", "mj_actions", target.file)
+		encryptedPath := filepath.Join("log", "bundle_probe", "extracted", "mj_actions", target.file)
+
+		decrypted, err := os.ReadFile(decryptedPath)
+		if err != nil {
+			return c.String(http.StatusInternalServerError, err.Error())
+		}
+		encrypted, err := os.ReadFile(encryptedPath)
+		if err != nil {
+			return c.String(http.StatusInternalServerError, err.Error())
+		}
+
+		patched, err := patchMajsoulLuaSource(string(decrypted), target.action, target.wrapper)
+		if err != nil {
+			return c.String(http.StatusInternalServerError, err.Error())
+		}
+		patchedEncrypted := xorMajsoulLua([]byte(patched))
+		if len(encrypted) != len(patchedEncrypted) {
+			return c.String(http.StatusInternalServerError, fmt.Sprintf("%s length mismatch", target.file))
+		}
+
+		patches = append(patches, majsoulLuaPatch{
+			File:        target.file,
+			OriginalB64: base64.StdEncoding.EncodeToString(encrypted),
+			PatchedB64:  base64.StdEncoding.EncodeToString(patchedEncrypted),
+		})
+	}
+	return c.JSON(http.StatusOK, patches)
+}
+
+func (h *mjHandler) majsoulActionBundle(c echo.Context) error {
+	return c.File(filepath.Join("log", "bundle_probe", "patched_action_bundle"))
+}
+
+func (h *mjHandler) enqueueMajsoulJSON(v interface{}) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		h.logError(err)
+		return
+	}
+	h.majsoulMessageQueue <- data
+}
+
+func uint32sToInts(values []uint32) []int {
+	out := make([]int, len(values))
+	for i, value := range values {
+		out[i] = int(value)
+	}
+	return out
+}
+
 type majsoulRawRequest struct {
 	name         string
 	responseType reflect.Type
 }
+
+type majsoulLuaPatch struct {
+	File        string `json:"file"`
+	OriginalB64 string `json:"original_b64"`
+	PatchedB64  string `json:"patched_b64"`
+}
+
+var majsoulLuaPatchTargets = []struct {
+	file    string
+	action  string
+	wrapper string
+}{
+	{
+		file:    "ActionNewRound.lua",
+		action:  "ActionNewRound",
+		wrapper: `MJH=function(u)LuaTools.AsyncHttpsGet("https://localhost:12121/"..u,function()end)end;pcall(function()MJH("m?a=p")end);local f=ActionNewRound.Play;function ActionNewRound.Play(d)pcall(function()MJH("m?a=n&t="..table.concat(d.tiles,",").."&d="..d.doras[1])end)return f(d)end;`,
+	},
+	{
+		file:    "ActionDealTile.lua",
+		action:  "ActionDealTile",
+		wrapper: `local f=ActionDealTile.Play;function ActionDealTile.Play(d)pcall(function()MJH("m?a=z&s="..d.seat.."&t="..d.tile.."&l="..d.left_tile_count)end)return f(d)end;`,
+	},
+	{
+		file:    "ActionChiPengGang.lua",
+		action:  "ActionChiPengGang",
+		wrapper: `local f=ActionChiPengGang.Play;function ActionChiPengGang.Play(d)pcall(function()MJH("m?a=c&s="..d.seat.."&y="..d.type.."&t="..table.concat(d.tiles,",").."&f="..table.concat(d.froms,","))end)return f(d)end;`,
+	},
+	{
+		file:    "ActionAnGangAddGang.lua",
+		action:  "ActionAnGangAddGang",
+		wrapper: `local f=ActionAnGangAddGang.Play;function ActionAnGangAddGang.Play(d)pcall(function()MJH("m?a=g&s="..d.seat.."&y="..d.type.."&t="..d.tiles)end)return f(d)end;`,
+	},
+}
+
+const majsoulLuaXorKey = "wrelupqezdfrqdsd"
 
 func unwrapMajsoulWrapper(rawData []byte) (string, []byte, error) {
 	wrapper := lq.Wrapper{}
@@ -197,16 +528,49 @@ func shortProtoMessage(message proto.Message) string {
 	return text
 }
 
+func majsoulRawPrintf(format string, args ...interface{}) {
+	message := fmt.Sprintf(format, args...)
+	fmt.Print(message)
+	if h != nil && h.log != nil {
+		h.log.Info(strings.TrimRight(message, "\r\n"))
+	}
+}
+func logMajsoulActionPrototype(action *lq.ActionPrototype) {
+	if action == nil {
+		return
+	}
+
+	parsed, err := action.ParseData()
+	if err == nil {
+		majsoulRawPrintf("[majsoul-raw] action step=%d %s %s\n", action.GetStep(), action.GetName(), shortProtoMessage(parsed))
+		return
+	}
+
+	data := action.GetData()
+	hexData := hex.EncodeToString(data)
+	if len(hexData) > 160 {
+		hexData = hexData[:160] + "..."
+	}
+	majsoulRawPrintf(
+		"[majsoul-raw] action step=%d %s encrypted len=%d hex=%s base64=%s parse_error=%v\n",
+		action.GetStep(),
+		action.GetName(),
+		len(data),
+		hexData,
+		base64.StdEncoding.EncodeToString(data),
+		err,
+	)
+}
 func (h *mjHandler) decodeMajsoulRawRequest(data []byte) {
 	if len(data) < 4 {
-		fmt.Printf("[majsoul-raw] request len=%d too short\n", len(data))
+		majsoulRawPrintf("[majsoul-raw] request len=%d too short\n", len(data))
 		return
 	}
 
 	messageIndex := binary.LittleEndian.Uint16(data[1:3])
 	rawMethodName, payload, err := unwrapMajsoulWrapper(data[3:])
 	if err != nil {
-		fmt.Printf("[majsoul-raw] request #%d unwrap error: %v\n", messageIndex, err)
+		majsoulRawPrintf("[majsoul-raw] request #%d unwrap error: %v\n", messageIndex, err)
 		return
 	}
 
@@ -218,19 +582,19 @@ func (h *mjHandler) decodeMajsoulRawRequest(data []byte) {
 
 	parts := strings.Split(methodName, ".")
 	if len(parts) < 3 {
-		fmt.Printf("[majsoul-raw] request #%d %s payload=%d\n", messageIndex, methodName, len(payload))
+		majsoulRawPrintf("[majsoul-raw] request #%d %s payload=%d\n", messageIndex, methodName, len(payload))
 		return
 	}
 
 	clientName, rpcName := parts[1], parts[2]
 	if clientName != "Lobby" && clientName != "FastTest" {
-		fmt.Printf("[majsoul-raw] request #%d %s payload=%d\n", messageIndex, methodName, len(payload))
+		majsoulRawPrintf("[majsoul-raw] request #%d %s payload=%d\n", messageIndex, methodName, len(payload))
 		return
 	}
 
 	methodType := lq.FindMethod(clientName, rpcName)
 	if methodType == nil || methodType.NumIn() < 2 || methodType.NumOut() < 1 {
-		fmt.Printf("[majsoul-raw] request #%d %s payload=%d\n", messageIndex, methodName, len(payload))
+		majsoulRawPrintf("[majsoul-raw] request #%d %s payload=%d\n", messageIndex, methodName, len(payload))
 		return
 	}
 
@@ -238,16 +602,45 @@ func (h *mjHandler) decodeMajsoulRawRequest(data []byte) {
 	request.responseType = methodType.Out(0)
 	reqMessage := reflect.New(reqType.Elem()).Interface().(proto.Message)
 	if err := proto.Unmarshal(payload, reqMessage); err != nil {
-		fmt.Printf("[majsoul-raw] request #%d %s decode error: %v\n", messageIndex, methodName, err)
+		majsoulRawPrintf("[majsoul-raw] request #%d %s decode error: %v\n", messageIndex, methodName, err)
 		return
 	}
 
-	fmt.Printf("[majsoul-raw] request #%d %s %s\n", messageIndex, methodName, shortProtoMessage(reqMessage))
+	majsoulRawPrintf("[majsoul-raw] request #%d %s %s\n", messageIndex, methodName, shortProtoMessage(reqMessage))
+	if methodName == "lq.FastTest.inputOperation" {
+		h.handleMajsoulSelfOperation(reqMessage)
+	}
+}
+
+func (h *mjHandler) handleMajsoulSelfOperation(reqMessage proto.Message) {
+	msg, ok := reqMessage.(*lq.ReqSelfOperation)
+	if !ok || msg.GetCancelOperation() || msg.GetTile() == "" {
+		return
+	}
+	if msg.GetType() != 1 {
+		majsoulRawPrintf("[majsoul-lite] skip non-discard self operation tile=%s type=%d\n", msg.GetTile(), msg.GetType())
+		return
+	}
+
+	selfSeat := h.majsoulRoundData.selfSeat
+	if selfSeat < 0 {
+		majsoulRawPrintf("[majsoul-lite] skip self discard without seat tile=%s type=%d\n", msg.GetTile(), msg.GetType())
+		return
+	}
+
+	h.enqueueMajsoulJSON(map[string]interface{}{
+		"seat":     selfSeat,
+		"tile":     msg.GetTile(),
+		"moqie":    msg.GetMoqie(),
+		"is_liqi":  false,
+		"is_wliqi": false,
+	})
+	majsoulRawPrintf("[majsoul-lite] self discard seat=%d tile=%s moqie=%v type=%d\n", selfSeat, msg.GetTile(), msg.GetMoqie(), msg.GetType())
 }
 
 func (h *mjHandler) decodeMajsoulRawResponse(data []byte) {
 	if len(data) < 4 {
-		fmt.Printf("[majsoul-raw] response len=%d too short\n", len(data))
+		majsoulRawPrintf("[majsoul-raw] response len=%d too short\n", len(data))
 		return
 	}
 
@@ -260,50 +653,65 @@ func (h *mjHandler) decodeMajsoulRawResponse(data []byte) {
 	if !ok || request.responseType == nil {
 		name, payload, err := unwrapMajsoulWrapper(data[3:])
 		if err != nil {
-			fmt.Printf("[majsoul-raw] response #%d unwrap error: %v\n", messageIndex, err)
+			majsoulRawPrintf("[majsoul-raw] response #%d unwrap error: %v\n", messageIndex, err)
 			return
 		}
 		if name == "" && ok {
 			name = request.name
 		}
-		fmt.Printf("[majsoul-raw] response #%d %s payload=%d\n", messageIndex, name, len(payload))
+		majsoulRawPrintf("[majsoul-raw] response #%d %s payload=%d\n", messageIndex, name, len(payload))
 		return
 	}
 
 	respMessage := reflect.New(request.responseType.Elem()).Interface().(proto.Message)
 	_, payload, err := unwrapMajsoulWrapper(data[3:])
 	if err != nil {
-		fmt.Printf("[majsoul-raw] response #%d %s unwrap error: %v\n", messageIndex, request.name, err)
+		majsoulRawPrintf("[majsoul-raw] response #%d %s unwrap error: %v\n", messageIndex, request.name, err)
 		return
 	}
 	if err := proto.Unmarshal(payload, respMessage); err != nil {
-		fmt.Printf("[majsoul-raw] response #%d %s decode error: %v\n", messageIndex, request.name, err)
+		majsoulRawPrintf("[majsoul-raw] response #%d %s decode error: %v\n", messageIndex, request.name, err)
 		return
 	}
 
-	fmt.Printf("[majsoul-raw] response #%d %s %s\n", messageIndex, request.name, shortProtoMessage(respMessage))
+	majsoulRawPrintf("[majsoul-raw] response #%d %s %s\n", messageIndex, request.name, shortProtoMessage(respMessage))
+	switch msg := respMessage.(type) {
+	case *lq.ResLogin:
+		if msg.GetAccountId() > 0 {
+			h.enqueueMajsoulJSON(map[string]interface{}{"account_id": int(msg.GetAccountId())})
+		}
+	case *lq.ResAuthGame:
+		h.enqueueMajsoulJSON(map[string]interface{}{
+			"seat_list":     uint32sToInts(msg.GetSeatList()),
+			"is_game_start": msg.GetIsGameStart(),
+			"ready_id_list": uint32sToInts(msg.GetReadyIdList()),
+		})
+	}
 }
 
 func (h *mjHandler) decodeMajsoulRawNotify(data []byte) {
 	name, payload, err := unwrapMajsoulWrapper(data[1:])
 	if err != nil {
-		fmt.Printf("[majsoul-raw] notify unwrap error: %v\n", err)
+		majsoulRawPrintf("[majsoul-raw] notify unwrap error: %v\n", err)
 		return
 	}
 
 	messageName := strings.TrimPrefix(name, ".")
 	messageType := proto.MessageType(messageName)
 	if messageType == nil {
-		fmt.Printf("[majsoul-raw] notify %s payload=%d\n", messageName, len(payload))
+		majsoulRawPrintf("[majsoul-raw] notify %s payload=%d\n", messageName, len(payload))
 		return
 	}
 
 	notifyMessage := reflect.New(messageType.Elem()).Interface().(proto.Message)
 	if err := proto.Unmarshal(payload, notifyMessage); err != nil {
-		fmt.Printf("[majsoul-raw] notify %s decode error: %v\n", messageName, err)
+		majsoulRawPrintf("[majsoul-raw] notify %s decode error: %v\n", messageName, err)
 		return
 	}
-	fmt.Printf("[majsoul-raw] notify %s %s\n", messageName, shortProtoMessage(notifyMessage))
+	majsoulRawPrintf("[majsoul-raw] notify %s %s\n", messageName, shortProtoMessage(notifyMessage))
+	if action, ok := notifyMessage.(*lq.ActionPrototype); ok {
+		logMajsoulActionPrototype(action)
+	}
 }
 
 func (h *mjHandler) runAnalysisMajsoulRawMessageTask() {
@@ -320,7 +728,7 @@ func (h *mjHandler) runAnalysisMajsoulRawMessageTask() {
 		case 3:
 			h.decodeMajsoulRawResponse(data)
 		default:
-			fmt.Printf("[majsoul-raw] unknown type=%d len=%d first=%v\n", data[0], len(data), data[:minInt(len(data), 12)])
+			majsoulRawPrintf("[majsoul-raw] unknown type=%d len=%d first=%v\n", data[0], len(data), data[:minInt(len(data), 12)])
 		}
 	}
 }
@@ -708,6 +1116,10 @@ func runServer(isHTTPS bool, port int) (err error) {
 	e.POST("/tenhou", h.analysisTenhou)
 	e.POST("/majsoul", h.analysisMajsoul)
 	e.POST("/majsoul-raw", h.analysisMajsoulRaw)
+	e.GET("/majsoul-lite", h.analysisMajsoulLite)
+	e.GET("/m", h.analysisMajsoulLite)
+	e.GET("/majsoul-lua-patches", h.majsoulLuaPatches)
+	e.GET("/majsoul-action-bundle", h.majsoulActionBundle)
 
 	// code.js도 이 포트를 사용한다
 	if port == 0 {

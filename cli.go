@@ -43,10 +43,7 @@ func (p *playerInfo) printDiscards() {
 		fgColor := color.FgWhite
 		var tile string
 		if disTile >= 0 { // 테다시
-			tile = util.Mahjong[disTile]
-			if disTile >= 27 {
-				tile = util.MahjongU[disTile] // 자패 테다시를 눈에 띄게 표시
-			}
+			tile = util.MahjongZH[disTile]
 			if p.isNaki { // 후로
 				fgColor = getOtherDiscardAlertColor(disTile) // 중장패 테다시를 강조
 				if util.InInts(i, p.meldDiscardsAt) {
@@ -56,7 +53,7 @@ func (p *playerInfo) printDiscards() {
 			}
 		} else { // 쯔모기리
 			disTile = ^disTile
-			tile = util.Mahjong[disTile]
+			tile = util.MahjongZH[disTile] + "*"
 			fgColor = color.FgHiBlack // 어둡게 표시
 		}
 		color.New(bgColor, fgColor).Print(tile)
@@ -69,6 +66,18 @@ func (p *playerInfo) printDiscards() {
 type handsRisk struct {
 	tile int
 	risk float64
+}
+
+func tilesToKoreanList(tiles []int) string {
+	if len(tiles) == 0 {
+		return ""
+	}
+
+	names := make([]string, len(tiles))
+	for i, tile := range tiles {
+		names[i] = util.MahjongZH[tile]
+	}
+	return strings.Join(names, " ")
 }
 
 // 34종 패의 위험도
@@ -405,7 +414,7 @@ func printWaitsWithImproves13_twoRows(result13 *util.Hand13AnalysisResult, disca
 	//	}
 	//	fmt.Println("]")
 	//} else {
-	fmt.Println(util.TilesToStrWithBracket(waitTiles))
+	fmt.Println(util.TilesToKoreanStrWithBracket(waitTiles))
 	//}
 
 	if len(result13.Improves) > 0 {
@@ -504,7 +513,7 @@ func (r *analysisResult) printWaitsWithImproves13_oneRow() {
 		}
 		// 버림패
 		if r.isDiscardTileDora {
-			color.New(color.FgHiWhite).Print("ド")
+			color.New(color.FgHiWhite).Print("도라타")
 		} else {
 			fmt.Print("타")
 		}
@@ -520,6 +529,7 @@ func (r *analysisResult) printWaitsWithImproves13_oneRow() {
 			} else {
 				color.New(getNumRiskColor(risk)).Print(tileZH)
 			}
+			fmt.Printf(" [위험 %.1f]", risk)
 		} else {
 			fmt.Print(tileZH)
 		}
@@ -641,7 +651,10 @@ func (r *analysisResult) printWaitsWithImproves13_oneRow() {
 	// 유효패 종류
 	fmt.Print(" ")
 	waitTiles := result13.Waits.AvailableTiles()
-	fmt.Print(util.TilesToStrWithBracket(waitTiles))
+	fmt.Print(util.TilesToKoreanStrWithBracket(waitTiles))
+	if shanten == 1 {
+		fmt.Printf(" [텐파이 진입: %s]", tilesToKoreanList(waitTiles))
+	}
 
 	//
 

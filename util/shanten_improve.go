@@ -120,13 +120,13 @@ func (r *Hand13AnalysisResult) String() string {
 	s := fmt.Sprintf("%d 유효패 %s\n%.2f 개량 유효패 [%d(%d)종]",
 		r.Waits.AllCount(),
 		//r.Waits.AllCount()+r.MeldWaits.AllCount(),
-		TilesToStrWithBracket(r.Waits.indexes()),
+		TilesToKoreanStrWithBracket(r.Waits.indexes()),
 		r.AvgImproveWaitsCount,
 		len(r.Improves),
 		r.ImproveWayCount,
 	)
 	if len(r.DamaWaits) > 0 {
-		s += fmt.Sprintf("(다마텐 유효패 %s)", TilesToStrWithBracket(r.DamaWaits.indexes()))
+		s += fmt.Sprintf("(다마텐 유효패 %s)", TilesToKoreanStrWithBracket(r.DamaWaits.indexes()))
 	}
 	if r.Shanten >= 1 {
 		mixedScore := r.MixedWaitsScore
@@ -576,7 +576,7 @@ func (r *Hand14AnalysisResult) String() string {
 		if r.OpenTiles[0] == r.OpenTiles[1] {
 			meldType = "퐁"
 		}
-		meldInfo = fmt.Sprintf("%s%s로 %s, ", string([]rune(MahjongZH[r.OpenTiles[0]])[:1]), MahjongZH[r.OpenTiles[1]], meldType)
+		meldInfo = fmt.Sprintf("%s%s %s, ", string([]rune(MahjongZH[r.OpenTiles[0]])[:1]), MahjongZH[r.OpenTiles[1]], meldType)
 	}
 	return meldInfo + fmt.Sprintf("%s 타: %s", MahjongZH[r.DiscardTile], r.Result13.String())
 }

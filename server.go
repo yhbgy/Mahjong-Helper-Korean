@@ -54,6 +54,9 @@ type mjHandler struct {
 	majsoulRawRequests  map[uint16]*majsoulRawRequest
 	majsoulRoundData    *majsoulRoundData
 
+	majsoulLastSelfDiscardTile string
+	majsoulLastSelfDiscardAt   time.Time
+
 	majsoulRecordMap                map[string]*majsoulRecordBaseInfo
 	majsoulCurrentRecordUUID        string
 	majsoulCurrentRecordActionsList []majsoulRoundActions
@@ -229,6 +232,20 @@ func queryBoolPtr(c echo.Context, name string) *bool {
 	return &parsed
 }
 
+func queryBoolPtrAny(c echo.Context, names ...string) *bool {
+	for _, name := range names {
+		if value := c.QueryParam(name); value != "" {
+			parsed := value == "true"
+			return &parsed
+		}
+	}
+	return nil
+}
+
+func boolPtr(value bool) *bool {
+	return &value
+}
+
 func (h *mjHandler) analysisMajsoulLite(c echo.Context) error {
 	action := c.QueryParam("a")
 	switch action {
@@ -242,6 +259,8 @@ func (h *mjHandler) analysisMajsoulLite(c echo.Context) error {
 		action = "ActionChiPengGang"
 	case "g":
 		action = "ActionAnGangAddGang"
+	case "h":
+		action = "ActionHule"
 	case "p":
 		action = "Ping"
 	}
@@ -269,11 +288,26 @@ func (h *mjHandler) analysisMajsoulLite(c echo.Context) error {
 		msg["doras"] = splitQueryList(queryParamAny(c, "doras", "d"))
 		msg["left_tile_count"] = queryIntAny(c, "left_tile_count", "l")
 	case "ActionDiscardTile":
-		msg["seat"] = queryIntAny(c, "seat", "s")
-		msg["tile"] = queryParamAny(c, "tile", "t")
-		msg["moqie"] = queryBoolPtr(c, "moqie")
-		msg["is_liqi"] = queryBoolPtr(c, "is_liqi")
-		msg["is_wliqi"] = queryBoolPtr(c, "is_wliqi")
+		seat := queryIntAny(c, "seat", "s")
+		tile := queryParamAny(c, "tile", "t")
+		if seat == h.majsoulRoundData.selfSeat &&
+			tile == h.majsoulLastSelfDiscardTile &&
+			time.Since(h.majsoulLastSelfDiscardAt) < 2*time.Second {
+			majsoulRawPrintf("[majsoul-lite] skip duplicate self ActionDiscardTile %s\n", c.Request().URL.RawQuery)
+			return c.NoContent(http.StatusOK)
+		}
+		msg["seat"] = seat
+		msg["tile"] = tile
+		msg["moqie"] = boolPtr(false)
+		if moqie := queryBoolPtrAny(c, "moqie", "m"); moqie != nil {
+			msg["moqie"] = moqie
+		}
+		msg["is_liqi"] = boolPtr(false)
+		if isLiqi := queryBoolPtrAny(c, "is_liqi", "r"); isLiqi != nil {
+			msg["is_liqi"] = isLiqi
+		}
+		msg["is_wliqi"] = queryBoolPtrAny(c, "is_wliqi", "w")
+		msg["operation"] = struct{}{}
 		msg["doras"] = splitQueryList(queryParamAny(c, "doras", "d"))
 	case "ActionChiPengGang":
 		msg["seat"] = queryIntAny(c, "seat", "s")
@@ -286,6 +320,20 @@ func (h *mjHandler) analysisMajsoulLite(c echo.Context) error {
 		msg["type"] = queryIntAny(c, "type", "y")
 		msg["tiles"] = queryParamAny(c, "tiles", "t")
 		msg["doras"] = splitQueryList(queryParamAny(c, "doras", "d"))
+	case "ActionHule":
+		zimo := false
+		if value := queryBoolPtrAny(c, "zimo", "z"); value != nil {
+			zimo = *value
+		}
+		msg["hules"] = []map[string]interface{}{
+			{
+				"seat":            queryIntAny(c, "seat", "s"),
+				"zimo":            zimo,
+				"point_rong":      queryIntAny(c, "point_rong", "r"),
+				"point_zimo_qin":  queryIntAny(c, "point_zimo_qin", "q"),
+				"point_zimo_xian": queryIntAny(c, "point_zimo_xian", "p"),
+			},
+		}
 	default:
 		return c.String(http.StatusBadRequest, "unknown action")
 	}
@@ -369,7 +417,7 @@ func patchMajsoulLuaSource(src string, action string, wrapper string) (string, e
 	originalLen := len(src)
 	ret := "return " + action
 	idx := strings.LastIndex(src, ret)
-	if idx < 0 {
+	if idx < 0 || strings.Contains(wrapper, "$") {
 		play := "function " + action + ".Play("
 		playIdx := strings.Index(src, play)
 		if playIdx < 0 {
@@ -488,12 +536,17 @@ var majsoulLuaPatchTargets = []struct {
 	{
 		file:    "ActionNewRound.lua",
 		action:  "ActionNewRound",
-		wrapper: `MJH=function(u)LuaTools.AsyncHttpsGet("https://localhost:12121/"..u,function()end)end;pcall(function()MJH("m?a=p")end);local f=ActionNewRound.Play;function ActionNewRound.Play(d)pcall(function()MJH("m?a=n&t="..table.concat(d.tiles,",").."&d="..d.doras[1])end)return f(d)end;`,
+		wrapper: `H=function(u)LuaTools.AsyncHttpsGet("https://localhost:12121/"..u,function()end)end;D=function(e)H("m?a=q&s="..e.seat.."&t="..e.tile)end;local f=ActionNewRound.Play;function ActionNewRound.Play(d)pcall(function()H("m?a=n&t="..table.concat(d.tiles,",").."&d="..d.doras[1])end)return f(d)end;`,
 	},
 	{
 		file:    "ActionDealTile.lua",
 		action:  "ActionDealTile",
 		wrapper: `local f=ActionDealTile.Play;function ActionDealTile.Play(d)pcall(function()MJH("m?a=z&s="..d.seat.."&t="..d.tile.."&l="..d.left_tile_count)end)return f(d)end;`,
+	},
+	{
+		file:    "ActionDiscardTile.lua",
+		action:  "ActionDiscardTile",
+		wrapper: `pcall(D,$)`,
 	},
 	{
 		file:    "ActionChiPengGang.lua",
@@ -504,6 +557,11 @@ var majsoulLuaPatchTargets = []struct {
 		file:    "ActionAnGangAddGang.lua",
 		action:  "ActionAnGangAddGang",
 		wrapper: `local f=ActionAnGangAddGang.Play;function ActionAnGangAddGang.Play(d)pcall(function()MJH("m?a=g&s="..d.seat.."&y="..d.type.."&t="..d.tiles)end)return f(d)end;`,
+	},
+	{
+		file:    "ActionHule.lua",
+		action:  "ActionHule",
+		wrapper: `local f=ActionHule.Play;function ActionHule.Play(c)pcall(function()local x=c.hules[1]H("m?a=h&s="..x.seat.."&z="..tostring(x.zimo).."&r="..(x.point_rong or 0).."&q="..(x.point_zimo_qin or 0).."&p="..(x.point_zimo_xian or 0))end)return f(c)end;`,
 	},
 }
 
@@ -530,6 +588,9 @@ func shortProtoMessage(message proto.Message) string {
 
 func majsoulRawPrintf(format string, args ...interface{}) {
 	message := fmt.Sprintf(format, args...)
+	if strings.HasPrefix(message, "[majsoul-raw]") {
+		return
+	}
 	fmt.Print(message)
 	if h != nil && h.log != nil {
 		h.log.Info(strings.TrimRight(message, "\r\n"))
@@ -635,6 +696,8 @@ func (h *mjHandler) handleMajsoulSelfOperation(reqMessage proto.Message) {
 		"is_liqi":  false,
 		"is_wliqi": false,
 	})
+	h.majsoulLastSelfDiscardTile = msg.GetTile()
+	h.majsoulLastSelfDiscardAt = time.Now()
 	majsoulRawPrintf("[majsoul-lite] self discard seat=%d tile=%s moqie=%v type=%d\n", selfSeat, msg.GetTile(), msg.GetMoqie(), msg.GetType())
 }
 

@@ -169,9 +169,38 @@ func Tiles34ToStr(tiles34 []int) (humanTiles string) {
 	return strings.TrimSpace(humanTiles)
 }
 
+func Tiles34ToKoreanStr(tiles34 []int) (humanTiles string) {
+	mergeSuit := func(lowerIndex, upperIndex int, suffix string) {
+		found := false
+		for i, c := range tiles34[lowerIndex:upperIndex] {
+			for j := 0; j < c; j++ {
+				found = true
+				humanTiles += string('1' + byte(i))
+			}
+		}
+		if found {
+			humanTiles += suffix + " "
+		}
+	}
+
+	mergeSuit(0, 9, "만")
+	mergeSuit(9, 18, "통")
+	mergeSuit(18, 27, "삭")
+	for i, c := range tiles34[27:34] {
+		for j := 0; j < c; j++ {
+			humanTiles += MahjongZH[27+i] + " "
+		}
+	}
+	return strings.TrimSpace(humanTiles)
+}
+
 // e.g. [9, 11, 27] => "13p 1z"
 func TilesToStr(tiles []int) (humanTiles string) {
 	return Tiles34ToStr(TilesToTiles34(tiles))
+}
+
+func TilesToKoreanStr(tiles []int) (humanTiles string) {
+	return Tiles34ToKoreanStr(TilesToTiles34(tiles))
 }
 
 func Tile34ToStr(tile34 int) string {
@@ -183,8 +212,16 @@ func TilesToStrWithBracket(tiles []int) string {
 	return "[" + TilesToStr(tiles) + "]"
 }
 
+func TilesToKoreanStrWithBracket(tiles []int) string {
+	return "[" + TilesToKoreanStr(tiles) + "]"
+}
+
 func Tiles34ToStrWithBracket(tiles34 []int) string {
 	return "[" + Tiles34ToStr(tiles34) + "]"
+}
+
+func Tiles34ToKoreanStrWithBracket(tiles34 []int) string {
+	return "[" + Tiles34ToKoreanStr(tiles34) + "]"
 }
 
 func ParseHumanTilesWithMelds(humanTilesWithMelds string) (playerInfo *model.PlayerInfo, err error) {

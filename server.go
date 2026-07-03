@@ -235,7 +235,7 @@ func queryBoolPtr(c echo.Context, name string) *bool {
 func queryBoolPtrAny(c echo.Context, names ...string) *bool {
 	for _, name := range names {
 		if value := c.QueryParam(name); value != "" {
-			parsed := value == "true"
+			parsed := value == "true" || value == "1"
 			return &parsed
 		}
 	}
@@ -261,6 +261,14 @@ func (h *mjHandler) analysisMajsoulLite(c echo.Context) error {
 		action = "ActionAnGangAddGang"
 	case "h":
 		action = "ActionHule"
+	case "l":
+		action = "ActionLiqi"
+	case "nt":
+		action = "ActionNoTile"
+	case "lj":
+		action = "ActionLiuJu"
+	case "b":
+		action = "ActionBaBei"
 	case "p":
 		action = "Ping"
 	}
@@ -277,6 +285,8 @@ func (h *mjHandler) analysisMajsoulLite(c echo.Context) error {
 		msg["ben"] = queryIntAny(c, "ben", "b")
 		msg["tiles"] = splitQueryList(queryParamAny(c, "tiles", "t"))
 		msg["dora"] = queryParamAny(c, "dora", "d")
+		msg["scores"] = splitQueryInts(queryParamAny(c, "scores", "sc"))
+		msg["liqibang"] = queryIntAny(c, "liqibang", "lb")
 		msg["left_tile_count"] = queryIntAny(c, "left_tile_count", "l")
 	case "ActionDealTile":
 		msg["seat"] = queryIntAny(c, "seat", "s")
@@ -320,6 +330,21 @@ func (h *mjHandler) analysisMajsoulLite(c echo.Context) error {
 		msg["type"] = queryIntAny(c, "type", "y")
 		msg["tiles"] = queryParamAny(c, "tiles", "t")
 		msg["doras"] = splitQueryList(queryParamAny(c, "doras", "d"))
+	case "ActionLiqi":
+		msg["seat"] = queryIntAny(c, "seat", "s")
+		if failed := queryBoolPtrAny(c, "failed", "f"); failed != nil {
+			msg["failed"] = failed
+		}
+	case "ActionNoTile", "ActionLiuJu":
+		msg["liuju_type"] = queryIntAny(c, "type", "y")
+	case "ActionBaBei":
+		msg["seat"] = queryIntAny(c, "seat", "s")
+		msg["tile"] = ""
+		msg["moqie"] = boolPtr(false)
+		if moqie := queryBoolPtrAny(c, "moqie", "m"); moqie != nil {
+			msg["moqie"] = moqie
+		}
+		msg["doras"] = splitQueryList(queryParamAny(c, "doras", "d"))
 	case "ActionHule":
 		zimo := false
 		if value := queryBoolPtrAny(c, "zimo", "z"); value != nil {
@@ -339,6 +364,9 @@ func (h *mjHandler) analysisMajsoulLite(c echo.Context) error {
 	}
 
 	msg["_action"] = action
+	if action == "ActionLiqi" || action == "ActionBaBei" {
+		fmt.Printf("[majsoul-event] %s %s\n", action, c.Request().URL.RawQuery)
+	}
 	majsoulRawPrintf("[majsoul-lite] %s %s\n", action, c.Request().URL.RawQuery)
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -536,17 +564,37 @@ var majsoulLuaPatchTargets = []struct {
 	{
 		file:    "ActionNewRound.lua",
 		action:  "ActionNewRound",
-		wrapper: `H=function(u)LuaTools.AsyncHttpsGet("https://localhost:12121/"..u,function()end)end;D=function(e)H("m?a=q&s="..e.seat.."&t="..e.tile)end;local f=ActionNewRound.Play;function ActionNewRound.Play(d)pcall(function()H("m?a=n&t="..table.concat(d.tiles,",").."&d="..d.doras[1])end)return f(d)end;`,
+		wrapper: `H=function(u)LuaTools.AsyncHttpsGet("https://localhost:12121/"..u,function()end)end;D=function(e)H("m?a=q&s="..e.seat.."&t="..e.tile)end;A=ActionNewRound;f=A.Play;function A.Play(d)pcall(H,"m?a=n&t="..table.concat(d.tiles,",").."&d="..d.dora.."&c="..d.chang.."&j="..d.ju.."&b="..d.ben.."&sc="..table.concat(d.scores or {},",").."&lb="..(d.liqibang or 0))return f(d)end;`,
 	},
 	{
 		file:    "ActionDealTile.lua",
 		action:  "ActionDealTile",
-		wrapper: `local f=ActionDealTile.Play;function ActionDealTile.Play(d)pcall(function()MJH("m?a=z&s="..d.seat.."&t="..d.tile.."&l="..d.left_tile_count)end)return f(d)end;`,
+		wrapper: `local f=ActionDealTile.Play;function ActionDealTile.Play(d)pcall(function()LuaTools.AsyncHttpsGet("https://localhost:12121/m?a=z&s="..d.seat.."&t="..(d.tile or "").."&l="..(d.left_tile_count or 0),function()end)if d.liqi and d.liqi.liqibang and d.liqi.liqibang>0 then LuaTools.AsyncHttpsGet("https://localhost:12121/m?a=l&s="..d.liqi.seat.."&f=false",function()end)end end)return f(d)end;`,
 	},
 	{
 		file:    "ActionDiscardTile.lua",
 		action:  "ActionDiscardTile",
-		wrapper: `pcall(D,$)`,
+		wrapper: `H("m?a=q&s="..$.seat.."&t="..$.tile.."&r="..tostring($.is_liqi))`,
+	},
+	{
+		file:    "ActionLiqi.lua",
+		action:  "ActionLiqi",
+		wrapper: `pcall(function()LuaTools.AsyncHttpsGet("https://localhost:12121/m?a=l&s="..$.seat.."&f="..tostring($.failed),function()end)end)`,
+	},
+	{
+		file:    "ActionNoTile.lua",
+		action:  "ActionNoTile",
+		wrapper: `pcall(H,"m?a=nt")`,
+	},
+	{
+		file:    "ActionLiuJu.lua",
+		action:  "ActionLiuJu",
+		wrapper: `pcall(H,"m?a=lj&y="..$.type)`,
+	},
+	{
+		file:    "ActionBaBei.lua",
+		action:  "ActionBaBei",
+		wrapper: `pcall(function()LuaTools.AsyncHttpsGet("https://localhost:12121/m?a=b&s="..$.seat.."&m="..tostring($.moqie),function()end)end)`,
 	},
 	{
 		file:    "ActionChiPengGang.lua",
@@ -588,7 +636,7 @@ func shortProtoMessage(message proto.Message) string {
 
 func majsoulRawPrintf(format string, args ...interface{}) {
 	message := fmt.Sprintf(format, args...)
-	if strings.HasPrefix(message, "[majsoul-raw]") {
+	if strings.HasPrefix(message, "[majsoul-raw]") || strings.HasPrefix(message, "[majsoul-lite]") {
 		return
 	}
 	fmt.Print(message)

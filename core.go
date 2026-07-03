@@ -84,6 +84,10 @@ type DataParser interface {
 	ParseNewDora() (kanDoraIndicator int)
 }
 
+type roundStateParser interface {
+	ParseRoundState() (scores []int, liqibang int, ok bool)
+}
+
 type playerInfo struct {
 	name string // 설명
 
@@ -189,6 +193,12 @@ type roundData struct {
 	// 설명
 	dealer int
 
+	scores   []int
+	liqibang int
+
+	pendingSelfNukiDoraReplacement bool
+	pendingSelfDrawnNorth          bool
+
 	// 설명
 	doraIndicators []int
 
@@ -261,6 +271,21 @@ func (d *roundData) reset(roundNumber int, benNumber int, dealer int) {
 	*d = *newData
 }
 
+func (d *roundData) updateRoundStateFromParser() {
+	parser, ok := d.parser.(roundStateParser)
+	if !ok {
+		return
+	}
+	scores, liqibang, ok := parser.ParseRoundState()
+	if !ok {
+		return
+	}
+	if len(scores) > 0 {
+		d.scores = scores
+	}
+	d.liqibang = liqibang
+}
+
 func (d *roundData) newGame() {
 	d.reset(0, 0, 0)
 }
@@ -295,6 +320,7 @@ func (d *roundData) doraList() (dl []int) {
 }
 
 func (d *roundData) printDiscards() {
+	d.printRoundState()
 	// 설명
 	for i := len(d.players) - 1; i >= 1; i-- {
 		if player := d.players[i]; d.playerNumber != 3 || player.selfWindTile != 30 {
@@ -541,6 +567,7 @@ func (d *roundData) analysis() error {
 		default:
 			panic("not impl!")
 		}
+		d.updateRoundStateFromParser()
 
 		// 설명
 		if analysisCache := getAnalysisCache(d.parser.GetSelfSeat()); analysisCache != nil {
@@ -723,8 +750,24 @@ func (d *roundData) analysis() error {
 		}
 		// 설명
 		tile, isRedFive, kanDoraIndicator := d.parser.ParseSelfDraw()
+		if d.pendingSelfNukiDoraReplacement || d.pendingSelfDrawnNorth {
+			if d.counts[30] > 0 {
+				d.counts[30]--
+				if d.pendingSelfDrawnNorth {
+					d.players[0].nukiDoraNum++
+					if !d.skipOutput {
+						color.HiYellow("%s 북빼기", d.players[0].name)
+					}
+				}
+			}
+			d.pendingSelfNukiDoraReplacement = false
+			d.pendingSelfDrawnNorth = false
+		}
 		d.descLeftCounts(tile)
 		d.counts[tile]++
+		if d.playerNumber == 3 && tile == 30 {
+			d.pendingSelfDrawnNorth = true
+		}
 		if isRedFive {
 			d.numRedFives[tile/9]++
 		}
@@ -787,6 +830,11 @@ func (d *roundData) analysis() error {
 			riskTables := d.analysisTilesRisk()
 			mixedRiskTable := riskTables.mixedRiskTable()
 
+			if d.pendingSelfNukiDoraReplacement && util.CountOfTiles34(d.counts)%3 == 1 {
+				d.counts[discardTile]++
+				d.pendingSelfNukiDoraReplacement = false
+			}
+
 			// 설명
 			d.counts[discardTile]--
 
@@ -833,8 +881,12 @@ func (d *roundData) analysis() error {
 			player.reachTileAtGlobal = len(d.globalDiscardTiles) - 1
 			player.reachTileAt = len(player.discardTiles) - 1
 			// 설명
-			if isTsumogiri && !d.skipOutput {
-				color.HiYellow("%s 쯔모기리 리치!", player.name)
+			if !d.skipOutput {
+				if isTsumogiri {
+					color.HiYellow("%s 쯔모기리 리치!", player.name)
+				} else {
+					color.HiYellow("%s 리치!", player.name)
+				}
 			}
 		} else if len(player.meldDiscardsAt) != len(player.melds) {
 			// 설명
@@ -924,12 +976,31 @@ func (d *roundData) analysis() error {
 			fmt.Println(d.players[who].name, points[i])
 		}
 	case d.parser.IsRyuukyoku():
-		// TODO
-		d.parser.ParseRyuukyoku()
+		if !debugMode {
+			clearConsole()
+		}
+		d.printDiscards()
+		type_, _, _ := d.parser.ParseRyuukyoku()
+		if type_ > 0 {
+			color.HiYellow("유국, 이번 국 종료 [%d]", type_)
+		} else {
+			color.HiYellow("유국, 이번 국 종료")
+		}
 	case d.parser.IsNukiDora():
 		who, isTsumogiri := d.parser.ParseNukiDora()
 		player := d.players[who]
 		player.nukiDoraNum++
+		if !d.skipOutput {
+			if !debugMode {
+				clearConsole()
+			}
+			d.printDiscards()
+			if isTsumogiri {
+				color.HiYellow("%s 북빼기(쯔모기리)", player.name)
+			} else {
+				color.HiYellow("%s 북빼기", player.name)
+			}
+		}
 		if who != 0 {
 			// 설명
 			d.descLeftCounts(30)
@@ -937,7 +1008,11 @@ func (d *roundData) analysis() error {
 			_ = isTsumogiri
 		} else {
 			// 설명
-			d.counts[30]--
+			if d.counts[30] > 0 {
+				d.counts[30]--
+			}
+			d.pendingSelfDrawnNorth = false
+			d.pendingSelfNukiDoraReplacement = true
 		}
 		// 설명
 		for _, player := range d.players {

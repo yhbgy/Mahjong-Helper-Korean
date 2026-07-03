@@ -17,6 +17,51 @@ func printAccountInfo(accountID int) {
 
 //
 
+func (d *roundData) printRoundState() {
+	names := []string{"자신", "하가", "대면", "상가"}
+	nukiCount := 0
+	for i, player := range d.players {
+		if i >= len(names) || (d.playerNumber == 3 && player.selfWindTile == 30) {
+			continue
+		}
+		nukiCount += player.nukiDoraNum
+	}
+	if len(d.scores) == 0 && d.benNumber == 0 && d.liqibang == 0 && nukiCount == 0 {
+		return
+	}
+
+	if d.roundWindTile >= 27 && d.roundWindTile < len(util.MahjongZH) {
+		fmt.Printf("%s %d국", util.MahjongZH[d.roundWindTile], d.roundNumber%4+1)
+	} else {
+		fmt.Printf("%d국", d.roundNumber%4+1)
+	}
+	if d.benNumber > 0 {
+		fmt.Printf(" %d본장", d.benNumber)
+	}
+	if d.liqibang > 0 {
+		fmt.Printf(" 리치봉 %d개", d.liqibang)
+	}
+	if len(d.scores) > 0 {
+		fmt.Print(" | 점수:")
+		for i, score := range d.scores {
+			if i >= len(names) || (d.playerNumber == 3 && i == 3) {
+				continue
+			}
+			fmt.Printf(" %s %d", names[i], score)
+		}
+	}
+	if nukiCount > 0 {
+		fmt.Print(" | 북빼기:")
+		for i, player := range d.players {
+			if i >= len(names) || (d.playerNumber == 3 && player.selfWindTile == 30) || player.nukiDoraNum == 0 {
+				continue
+			}
+			fmt.Printf(" %s %d", names[i], player.nukiDoraNum)
+		}
+	}
+	fmt.Println()
+}
+
 func (p *playerInfo) printDiscards() {
 	// TODO: 부자연스러운 버림패나 위험패를 강조한다. 예:
 	// - 초반부터 중장패를 버림
@@ -35,7 +80,11 @@ func (p *playerInfo) printDiscards() {
 	// https://tieba.baidu.com/p/3372239806
 	//      치할 때 나온 패의 색은 위험하다. 퐁 이후에는 모든 패가 위험하다.
 
-	fmt.Printf(p.name + ":")
+	fmt.Print(p.name)
+	if p.isReached {
+		color.New(color.FgHiYellow).Print("(리치)")
+	}
+	fmt.Print(":")
 	for i, disTile := range p.discardTiles {
 		fmt.Printf(" ")
 		// TODO: 도라와 적도라 표시

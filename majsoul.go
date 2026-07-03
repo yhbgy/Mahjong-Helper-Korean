@@ -11,6 +11,8 @@ import (
 )
 
 type majsoulMessage struct {
+	Action string `json:"_action"`
+
 	// 서버 사용자 데이터베이스의 ID. 값이 작을수록 가입 시점이 빠르다
 	AccountID int `json:"account_id"`
 
@@ -57,12 +59,14 @@ type majsoulMessage struct {
 
 	// ActionNewRound
 	// {"chang":0,"ju":0,"ben":0,"tiles":["1m","3m","7m","3p","6p","7p","6s","1z","1z","2z","3z","4z","7z"],"dora":"6m","scores":[25000,25000,25000,25000],"liqibang":0,"al":false,"md5":"","left_tile_count":69}
-	MD5   string      `json:"md5"`
-	Chang *int        `json:"chang"`
-	Ju    *int        `json:"ju"`
-	Ben   *int        `json:"ben"`
-	Tiles interface{} `json:"tiles"` // 설명
-	Dora  string      `json:"dora"`
+	MD5      string      `json:"md5"`
+	Chang    *int        `json:"chang"`
+	Ju       *int        `json:"ju"`
+	Ben      *int        `json:"ben"`
+	Tiles    interface{} `json:"tiles"` // 설명
+	Dora     string      `json:"dora"`
+	Scores   interface{} `json:"scores"`
+	Liqibang *int        `json:"liqibang"`
 
 	// RecordNewRound
 	Tiles0 []string `json:"tiles0"`
@@ -99,6 +103,7 @@ type majsoulMessage struct {
 	Froms []int `json:"froms"`
 
 	// ActionLiqi
+	LiqiFailed *bool `json:"failed"`
 
 	// ActionHule
 	Hules []struct {
@@ -110,6 +115,7 @@ type majsoulMessage struct {
 	} `json:"hules"`
 
 	// ActionLiuJu
+	LiuJuType *int `json:"liuju_type"`
 	// {"liujumanguan":false,"players":[{"tingpai":true,"hand":["3s","3s","4s","5s","6s","1z","1z","7z","7z","7z"],"tings":[{"tile":"1z","haveyi":true},{"tile":"3s","haveyi":true}]},{"tingpai":false},{"tingpai":false},{"tingpai":true,"hand":["4m","0m","6m","6m","6m","4s","4s","4s","5s","7s"],"tings":[{"tile":"6s","haveyi":true}]}],"scores":[{"old_scores":[23000,29000,24000,24000],"delta_scores":[1500,-1500,-1500,1500]}],"gameend":false}
 	//Liujumanguan *bool `json:"liujumanguan"`
 	//Players *struct{ } `json:"players"`
@@ -162,7 +168,7 @@ func (d *majsoulRoundData) normalTiles(tiles interface{}) (majsoulTiles []string
 func (d *majsoulRoundData) parseWho(seat int) int {
 	// 0=자신, 1=하가, 2=대가, 3=상가로 변환한다
 	// 3인마작과 4인마작 모두에 적용된다
-	who := (seat + d.dealer - d.roundNumber%4 + 4) % 4
+	who := (seat - d.selfSeat + 4) % 4
 	return who
 }
 
@@ -172,6 +178,35 @@ func (d *majsoulRoundData) mustParseMajsoulTile(humanTile string) (tile34 int, i
 		panic(err)
 	}
 	return
+}
+
+func (d *majsoulRoundData) normalInts(values interface{}) (ints []int) {
+	switch typed := values.(type) {
+	case nil:
+		return nil
+	case []interface{}:
+		ints = make([]int, 0, len(typed))
+		for _, value := range typed {
+			switch v := value.(type) {
+			case float64:
+				ints = append(ints, int(v))
+			case int:
+				ints = append(ints, v)
+			}
+		}
+	case []int:
+		ints = append(ints, typed...)
+	}
+	return
+}
+
+func (d *majsoulRoundData) ParseRoundState() (scores []int, liqibang int, ok bool) {
+	msg := d.msg
+	scores = d.normalInts(msg.Scores)
+	if msg.Liqibang != nil {
+		liqibang = *msg.Liqibang
+	}
+	return scores, liqibang, len(scores) > 0 || msg.Liqibang != nil
 }
 
 func (d *majsoulRoundData) mustParseMajsoulTiles(majsoulTiles []string) (tiles []int, numRedFive int) {
@@ -465,11 +500,12 @@ func (d *majsoulRoundData) ParseOpen() (who int, meld *model.Meld, kanDoraIndica
 }
 
 func (d *majsoulRoundData) IsReach() bool {
-	return false
+	msg := d.msg
+	return msg.Action == "ActionLiqi" && (msg.LiqiFailed == nil || !*msg.LiqiFailed) && msg.Seat != nil
 }
 
 func (d *majsoulRoundData) ParseReach() (who int) {
-	return 0
+	return d.parseWho(*d.msg.Seat)
 }
 
 func (d *majsoulRoundData) IsFuriten() bool {
@@ -506,13 +542,14 @@ func (d *majsoulRoundData) ParseRoundWin() (whos []int, points []int) {
 }
 
 func (d *majsoulRoundData) IsRyuukyoku() bool {
-	// TODO
-	// ActionLiuJu RecordLiuJu
-	return false
+	msg := d.msg
+	return msg.Action == "ActionNoTile" || msg.Action == "ActionLiuJu"
 }
 
 func (d *majsoulRoundData) ParseRyuukyoku() (type_ int, whos []int, points []int) {
-	// TODO
+	if d.msg.LiuJuType != nil {
+		type_ = *d.msg.LiuJuType
+	}
 	return
 }
 

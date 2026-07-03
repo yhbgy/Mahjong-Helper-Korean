@@ -26,6 +26,7 @@
     "ActionHule",
     "ActionLiuJu",
     "ActionBabei",
+    "ActionBaBei",
     "ActionNoTile",
     "ActionMJStart",
   ];

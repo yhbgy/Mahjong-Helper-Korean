@@ -26,7 +26,7 @@ func (d *roundData) printRoundState() {
 		}
 		nukiCount += player.nukiDoraNum
 	}
-	if len(d.scores) == 0 && d.benNumber == 0 && d.liqibang == 0 && nukiCount == 0 {
+	if len(d.scores) == 0 && d.benNumber == 0 && d.liqibang == 0 && nukiCount == 0 && len(d.doraIndicators) == 0 {
 		return
 	}
 
@@ -48,6 +48,14 @@ func (d *roundData) printRoundState() {
 				continue
 			}
 			fmt.Printf(" %s %d", names[i], score)
+		}
+	}
+	if len(d.doraIndicators) > 0 {
+		fmt.Print(" | 도라 표시패:")
+		for _, tile := range d.doraIndicators {
+			if tile >= 0 && tile < len(util.MahjongZH) {
+				fmt.Printf(" %s", util.MahjongZH[tile])
+			}
 		}
 	}
 	if nukiCount > 0 {
@@ -720,6 +728,7 @@ func printResults14WithRisk(results14 util.Hand14AnalysisResultList, mixedRiskTa
 	if len(results14) == 0 {
 		return
 	}
+	results14 = sortResults14ForDisplay(results14, mixedRiskTable)
 
 	maxMixedScore := -1.0
 	maxAvgImproveWaitsCount := -1.0
@@ -772,4 +781,61 @@ func printResults14WithRisk(results14 util.Hand14AnalysisResultList, mixedRiskTa
 		}
 		r.printWaitsWithImproves13_oneRow()
 	}
+}
+
+func sortResults14ForDisplay(results14 util.Hand14AnalysisResultList, mixedRiskTable riskTable) util.Hand14AnalysisResultList {
+	sorted := append(util.Hand14AnalysisResultList{}, results14...)
+	riskOf := func(result *util.Hand14AnalysisResult) float64 {
+		if mixedRiskTable == nil || result.DiscardTile < 0 || result.DiscardTile >= len(mixedRiskTable) {
+			return 0
+		}
+		return mixedRiskTable[result.DiscardTile]
+	}
+	sort.SliceStable(sorted, func(i, j int) bool {
+		ri, rj := sorted[i].Result13, sorted[j].Result13
+		if ri.Shanten != rj.Shanten {
+			return ri.Shanten < rj.Shanten
+		}
+
+		wi, wj := ri.Waits.AllCount(), rj.Waits.AllCount()
+		switch ri.Shanten {
+		case 0:
+			if !util.InDelta(ri.MixedRoundPoint, rj.MixedRoundPoint, 100) {
+				return ri.MixedRoundPoint > rj.MixedRoundPoint
+			}
+			if !util.Equal(ri.AvgAgariRate, rj.AvgAgariRate) {
+				return ri.AvgAgariRate > rj.AvgAgariRate
+			}
+		case 1, 2:
+			if !util.Equal(ri.MixedWaitsScore, rj.MixedWaitsScore) {
+				return ri.MixedWaitsScore > rj.MixedWaitsScore
+			}
+			if wi != wj {
+				return wi > wj
+			}
+			if !util.Equal(ri.AvgNextShantenWaitsCount, rj.AvgNextShantenWaitsCount) {
+				return ri.AvgNextShantenWaitsCount > rj.AvgNextShantenWaitsCount
+			}
+		default:
+			if !util.Equal(ri.AvgImproveWaitsCount, rj.AvgImproveWaitsCount) {
+				return ri.AvgImproveWaitsCount > rj.AvgImproveWaitsCount
+			}
+			if wi != wj {
+				return wi > wj
+			}
+		}
+
+		riskI, riskJ := riskOf(sorted[i]), riskOf(sorted[j])
+		if !util.Equal(riskI, riskJ) {
+			return riskI < riskJ
+		}
+		if !util.Equal(ri.AvgImproveWaitsCount, rj.AvgImproveWaitsCount) {
+			return ri.AvgImproveWaitsCount > rj.AvgImproveWaitsCount
+		}
+		if !util.Equal(ri.MixedRoundPoint, rj.MixedRoundPoint) {
+			return ri.MixedRoundPoint > rj.MixedRoundPoint
+		}
+		return sorted[i].DiscardTile < sorted[j].DiscardTile
+	})
+	return sorted
 }

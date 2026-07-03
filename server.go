@@ -284,7 +284,11 @@ func (h *mjHandler) analysisMajsoulLite(c echo.Context) error {
 		msg["ju"] = queryIntAny(c, "ju", "j")
 		msg["ben"] = queryIntAny(c, "ben", "b")
 		msg["tiles"] = splitQueryList(queryParamAny(c, "tiles", "t"))
-		msg["dora"] = queryParamAny(c, "dora", "d")
+		doras := splitQueryList(queryParamAny(c, "doras", "ds", "dora", "d"))
+		if len(doras) > 0 {
+			msg["dora"] = doras[0]
+			msg["doras"] = doras
+		}
 		msg["scores"] = splitQueryInts(queryParamAny(c, "scores", "sc"))
 		msg["liqibang"] = queryIntAny(c, "liqibang", "lb")
 		msg["left_tile_count"] = queryIntAny(c, "left_tile_count", "l")
@@ -564,7 +568,7 @@ var majsoulLuaPatchTargets = []struct {
 	{
 		file:    "ActionNewRound.lua",
 		action:  "ActionNewRound",
-		wrapper: `H=function(u)LuaTools.AsyncHttpsGet("https://localhost:12121/"..u,function()end)end;D=function(e)H("m?a=q&s="..e.seat.."&t="..e.tile)end;A=ActionNewRound;f=A.Play;function A.Play(d)pcall(H,"m?a=n&t="..table.concat(d.tiles,",").."&d="..d.dora.."&c="..d.chang.."&j="..d.ju.."&b="..d.ben.."&sc="..table.concat(d.scores or {},",").."&lb="..(d.liqibang or 0))return f(d)end;`,
+		wrapper: `H=function(u)LuaTools.AsyncHttpsGet("https://localhost:12121/"..u,function()end)end;D=function(e)H("m?a=q&s="..e.seat.."&t="..e.tile)end;A=ActionNewRound;f=A.Play;function A.Play(d)local ds=d.doras or {};if #ds==0 and d.dora then ds={d.dora}end;pcall(H,"m?a=n&t="..table.concat(d.tiles,",").."&ds="..table.concat(ds,",").."&c="..d.chang.."&j="..d.ju.."&b="..d.ben.."&sc="..table.concat(d.scores or {},",").."&lb="..(d.liqibang or 0))return f(d)end;`,
 	},
 	{
 		file:    "ActionDealTile.lua",

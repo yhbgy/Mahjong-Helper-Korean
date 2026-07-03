@@ -349,14 +349,14 @@ func (d *majsoulRoundData) ParseInit() (roundNumber int, benNumber int, dealer i
 
 	roundNumber = 4*(*msg.Chang) + *msg.Ju
 	benNumber = *msg.Ben
-	if msg.Dora != "" {
-		doraIndicator, _ := d.mustParseMajsoulTile(msg.Dora)
-		doraIndicators = append(doraIndicators, doraIndicator)
-	} else {
+	if len(msg.Doras) > 0 {
 		for _, dora := range msg.Doras {
 			doraIndicator, _ := d.mustParseMajsoulTile(dora)
 			doraIndicators = append(doraIndicators, doraIndicator)
 		}
+	} else if msg.Dora != "" {
+		doraIndicator, _ := d.mustParseMajsoulTile(msg.Dora)
+		doraIndicators = append(doraIndicators, doraIndicator)
 	}
 	numRedFives = make([]int, 3)
 
